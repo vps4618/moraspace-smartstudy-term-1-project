@@ -6,12 +6,19 @@ app = FastAPI()
 
 # Temporary mock database
 mock_db = {
-"LIBRARY_02": {
-        "name": "Library 1st Floor",
+"LIBRARY_01": {
+        "name": "Sentra Court",
         "capacity": 50,
         "current_occupancy": 5,
         "wifi": True,
         "power": True
+    },
+    "LIBRARY_02":{
+        "name" : "Apaya",
+        "capacity": 60,
+        "current_occupancy": 5,
+        "wifi": True,
+        "power": True,
     }
 }
 

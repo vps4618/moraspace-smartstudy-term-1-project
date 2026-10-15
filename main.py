@@ -17,7 +17,7 @@ app.add_middleware(
 )
 
 # Define a strong secret key (Do not share this publicly)
-SECRET_API_KEY = os.getenv("SECRET_API_KEY")
+SECRET_API_KEY = os.getenv("API")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 
