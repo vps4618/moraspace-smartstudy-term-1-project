@@ -9,14 +9,14 @@ mock_db = {
 "LIBRARY_01": {
         "name": "Sentra Court",
         "capacity": 50,
-        "current_occupancy": 5,
+        "current_occupancy": 0,
         "wifi": True,
         "power": True
     },
     "LIBRARY_02":{
         "name" : "Apaya",
         "capacity": 60,
-        "current_occupancy": 5,
+        "current_occupancy": 0,
         "wifi": True,
         "power": True,
     }
