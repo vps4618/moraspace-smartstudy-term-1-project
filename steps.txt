@@ -5,7 +5,23 @@ development
 
     we can view docs - http://localhost:8000/docs
 
-    testing (simulate esp32) -  curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/sensor/event" -H "Content-Type: application/json" -H "X-API-Key:your_key" -d "{\"area id\": \"LIBRARY_02\", \"event\": \"ENTER\"}"
+
+
+
+
+
+    testing
+    ----------
+    (simulate esp32) (close area - apaya) -  curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/sensor/event" -H "Content-Type: application/json" -H "X-API-Key:your_key" -d "{\"area id\": \"apaya\", \"event\": \"ENTER\"}"
+    
+    (open area - centra) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/sensor/event" -H "Content-Type: application/json" -H "X-API-Key:your_key" -d "{\"area id\": \"centra\", \"student_count\": \"{value}\"}"
+
+
+
+
+
+
+
 
 3. hardware changes needed
     // Wi-Fi credentials and your computer's Local IP

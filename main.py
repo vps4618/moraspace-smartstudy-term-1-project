@@ -1,13 +1,13 @@
 import os
 from fastapi import FastAPI , HTTPException , Security , Depends , WebSocket , WebSocketDisconnect , Query
 from fastapi.security.api_key import APIKeyHeader
-from schemas import SensorEvent,mock_db
+from schemas import SensorEvent,mock_db, OccupancySync , EnvTelemetry
 from fastapi.middleware.cors import CORSMiddleware
 
 # ! Disable the /docs , /redoc, and openapi.json routes in production
 app = FastAPI(docs_url=None,redoc_url=None,openapi_url=None,title = "SmartStudy Backend")
 
-# Add this CORS configuration
+# Add this CORS configuration (to prevent CORS errors)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows requests from any domain (like 127.0.0.1)
@@ -82,3 +82,28 @@ def get_recommendations():
     
     # Sort descending by score
     return sorted(results, key=lambda x: x["score"], reverse=True)
+
+
+# for open area
+@app.post("/api/occupancy/sync")
+async def sync_occupancy(data: OccupancySync, api_key: str = Depends(verify_api_key)):
+    if data.area_id not in mock_db:
+        raise HTTPException(status_code=404, detail="Area not found")
+    mock_db[data.area_id]["students"] = data.student_count
+    # If using PostgreSQL: execute "SELECT record_occupancy(%s, %s)" with (data.area_id, data.student_count)
+    return {"status": "updated", "count": data.student_count}
+
+# for taking environment data
+@app.post("/api/env/sync")
+async def sync_environment(data: EnvTelemetry, api_key: str = Depends(verify_api_key)):
+    if data.area_id not in mock_db:
+        raise HTTPException(status_code=404, detail="Area not found")
+    # Update the dictionary / database with new environmental metrics
+    mock_db[data.area_id].update({
+        "aqi": data.aqi,
+        "temp": data.temp,
+        "feelsLike": data.feels_like,
+        "humidity": data.humidity,
+        "noise": data.noise
+    })
+    return {"status": "env_updated"}
