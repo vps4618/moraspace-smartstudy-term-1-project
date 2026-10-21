@@ -9,16 +9,30 @@ mock_db = {
 "centra": {
         "name": "Sentra Court",
         "capacity": 50,
-        "current_occupancy": 0,
         "wifi": True,
-        "power": True
+        "power": True,
+        "aqi": 42,
+        "temp": 24.0,
+        "feelsLike": 26.0,
+        "humidity": 55.0,
+        "noise": 45.0,
+        "students": 18,
+        "overall": 85
     },
     "apaya":{
         "name" : "Apaya",
         "capacity": 60,
-        "current_occupancy": 0,
         "wifi": True,
         "power": True,
+        "aqi": 115,
+        "temp": 33.0,
+        "feelsLike": 38.0,
+        "humidity": 72.0,
+        "noise": 68.0,
+
+        "students": 42,
+        
+        "overall": 52
     }
 }
 

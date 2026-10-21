@@ -49,16 +49,16 @@ async def handle_sensor_event(event_data : SensorEvent, api_key: str = Depends(v
     area = mock_db[area_id]
 
     if event_data.event == "ENTER":
-        if area["current_occupancy"] < area["capacity"]:
-            area["current_occupancy"] += 1
+        if area["students"] < area["capacity"]:
+            area["students"] += 1
     elif event_data.event == "EXIT":
-        if area["current_occupancy"] > 0:
-            area["current_occupancy"] -= 1
+        if area["students"] > 0:
+            area["students"] -= 1
 
     # 2. Format the payload that want the frontend to receive
     live_update = {
         "area_id": event_data.area_id,
-        "new_occupancy": area["current_occupancy"],
+        "new_occupancy": area["students"],
         "status": "success"
     }
     return live_update
