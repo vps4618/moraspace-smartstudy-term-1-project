@@ -1,5 +1,4 @@
 import os
-import asyncio
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import asynccontextmanager
@@ -108,41 +107,48 @@ async def handle_sensor_event(event_data: SensorEvent, db=Depends(get_db), api_k
 @app.get("/api/study-areas")
 def get_study_areas(db=Depends(get_db)):
     cur = db.cursor()
-
-    # 1. Execute the heartbeat check exactly when the user loads the dashboard
-    cur.execute("""
-        UPDATE study_areas
-        SET wifi_available = FALSE, power_available = FALSE
-        WHERE last_sync < NOW() - INTERVAL '2 minutes'
-        AND (wifi_available = TRUE OR power_available = TRUE);
-    """)
-    db.commit()
     
-    cur.execute("SELECT * FROM v_current_occupancy;")
-    rows = cur.fetchall()
-    
-    # Format exactly as Nisal's frontend expects
-    dashboard_data = {}
-    for row in rows:
-        # Recreating Thareen's basic score logic
-        availability_ratio = row["seats_available"] / row["capacity"]
-        score = (0.40 * availability_ratio) + (0.15 * int(row["wifi_available"])) + (0.10 * int(row["power_available"]))
-        # Normalize score to 100
-        overall_score = min(int(score * 100), 100) 
+    try:
+        # 1. Execute the heartbeat check exactly when the user loads the dashboard
+        cur.execute("""
+            UPDATE study_areas
+            SET wifi_available = FALSE, power_available = FALSE
+            WHERE last_sync < NOW() - INTERVAL '2 minutes'
+            AND (wifi_available = TRUE OR power_available = TRUE);
+        """)
+        db.commit()
+        
+        cur.execute("SELECT * FROM v_current_occupancy;")
+        rows = cur.fetchall()
+        
+        # Format exactly as Nisal's frontend expects
+        dashboard_data = {}
+        for row in rows:
+            # Recreating Thareen's basic score logic
+            availability_ratio = row["seats_available"] / row["capacity"]
+            score = (0.40 * availability_ratio) + (0.15 * int(row["wifi_available"])) + (0.10 * int(row["power_available"]))
+            # Normalize score to 100
+            overall_score = min(int(score * 100), 100) 
 
-        dashboard_data[row["slug"]] = {
-            "capacity": row["capacity"],
-            "students": row["student_count"],
-            "wifi": row["wifi_available"],
-            "power": row["power_available"],
-            "aqi": row["aqi"],
-            "temp": float(row["temp"]),
-            "feelsLike": float(row["feels_like"]),
-            "humidity": float(row["humidity"]),
-            "noise": float(row["noise"]),
-            "overall": overall_score
-        }
-    return dashboard_data
+            dashboard_data[row["slug"]] = {
+                "capacity": row["capacity"],
+                "students": row["student_count"],
+                "wifi": row["wifi_available"],
+                "power": row["power_available"],
+                "aqi": row["aqi"],
+                "temp": float(row["temp"]),
+                "feelsLike": float(row["feels_like"]),
+                "humidity": float(row["humidity"]),
+                "noise": float(row["noise"]),
+                "overall": overall_score
+            }
+        return dashboard_data
+        
+    except Exception as e:
+        # Rollback the transaction to prevent database locks on failed queries
+        db.rollback()
+        # Surface the exact Python/PostgreSQL error to the browser
+        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
 
 @app.post("/api/occupancy/sync")
 async def sync_occupancy(data: OccupancySync, db=Depends(get_db), api_key: str = Depends(verify_api_key)):
