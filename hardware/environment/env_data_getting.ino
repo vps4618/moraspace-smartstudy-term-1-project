@@ -22,14 +22,52 @@
 #define SAMPLE_RATE 16000
 #define SAMPLE_COUNT 1024
 
-// ---------- Wi-Fi Credentials ----------
-const char* ssid = "Galaxy S9c3cf";
-const char* password = "vqnp2287";
-WiFiServer server(8888);
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include "secrets.h" // Your file with WIFI_SSID, WIFI_PASSWORD, and SECRET_API_KEY
+
+const char* serverUrl = "https://smartstudy-backend-psi.vercel.app/api/env/sync";
+
+// FreeRTOS queue to hold JSON strings waiting to be sent
+QueueHandle_t envDataQueue = nullptr;
 
 Adafruit_AHTX0 aht;       //ens+bme
 
 ScioSense_ENS160 ens160(ENS160_I2CADDR_1);  // 0x53
+
+
+// Create background HTTP Task
+void backendRequestTask(void *parameter) {
+  String* payloadPtr; // Use a pointer
+
+  for (;;) {
+    // Wait for a pointer to enter the queue
+    if (xQueueReceive(envDataQueue, &payloadPtr, portMAX_DELAY) == pdTRUE) {
+      if (WiFi.status() == WL_CONNECTED) {
+        WiFiClientSecure client;
+        client.setInsecure(); // Skip strict SSL
+
+        HTTPClient http;
+        http.begin(client, serverUrl);
+        http.addHeader("Content-Type", "application/json");
+        http.addHeader("X-API-Key", SECRET_API_KEY);
+        
+        // Dereference the pointer with * to get the string
+        int httpResponseCode = http.POST(*payloadPtr);
+        
+        if (httpResponseCode > 0) {
+          Serial.printf("Env Sync Success: %d\n", httpResponseCode);
+        } else {
+          Serial.printf("Env Sync Failed: %d\n", httpResponseCode);
+        }
+        http.end();
+      }
+      // CRITICAL: Free the heap memory so the ESP32 doesn't run out of RAM
+      delete payloadPtr;
+    }
+  }
+}
+
 
 
 // ---------- I2C Bus Recovery Function ----------
@@ -59,6 +97,21 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi connected.");
+
+  // Buffer sensor events and send them in the background
+  envDataQueue = xQueueCreate(5, sizeof(String*));
+  if (envDataQueue != nullptr) {
+    xTaskCreate(
+      backendRequestTask,
+      "EnvBackendTask",
+      8192,
+      nullptr,
+      1,
+      nullptr
+    );
+  } else {
+    Serial.println("Failed to create backend event queue.");
+  }
 
   // ---------- mDNS Setup ----------
   if (!MDNS.begin("esp32sensors")) {
@@ -343,30 +396,35 @@ void loop() {
 
 
   // =====================================================
-  // BUILD JSON PAYLOAD
+  // BUILD JSON PAYLOAD & QUEUE FOR BACKEND
   // =====================================================
-  long rssi = WiFi.RSSI(); // Check live Wi-Fi signal strength
+  long rssi = WiFi.RSSI();
+  bool is_wifi_good = (rssi > -85);
+  float feels_like = temp + (hum * 0.05); // Rough heat index calculation
 
+  // Construct JSON to match FastAPI EnvTelemetry schema
   String jsonPayload = "{";
+  jsonPayload += "\"area_id\": \"apaya\","; 
+  jsonPayload += "\"aqi\":" + String(int(aqi)) + ",";
   jsonPayload += "\"temp\":" + String(temp, 2) + ",";
-  jsonPayload += "\"hum\":" + String(hum, 2) + ",";
-  jsonPayload += "\"eco2\":" + String(eco2, 2) + ",";
-  jsonPayload += "\"tvoc\":" + String(tvoc, 2) + ",";
-  jsonPayload += "\"aqi\":" + String(aqi, 2) + ",";
-  jsonPayload += "\"dust_ug_m3\":" + String(avgr, 2) + ",";
-  jsonPayload += "\"noise_db\":" + String(fin, 2)+ ",";
-  jsonPayload += "\"wifi_rssi\":" + String(rssi); // Append the RSSI value
+  jsonPayload += "\"feels_like\":" + String(feels_like, 2) + ",";
+  jsonPayload += "\"humidity\":" + String(hum, 2) + ",";
+  jsonPayload += "\"noise\":" + String(fin, 2) + ",";
+  jsonPayload += "\"wifi\":" + String(is_wifi_good ? "true" : "false") + ",";
+  jsonPayload += "\"power\": true";
   jsonPayload += "}";
 
-  // Send to Serial Monitor
-  Serial.println(jsonPayload);
+  Serial.println("Queuing data: " + jsonPayload);
 
-  // Send to connected Wi-Fi client (Python script)
-  WiFiClient client = server.available();
-  if (client && client.connected()) {
-    client.println(jsonPayload);
+  // Create a heap-allocated pointer of the string
+  String* payloadPtr = new String(jsonPayload);
+
+  if (envDataQueue != nullptr) {
+    // Send the pointer to the queue
+    if (xQueueSend(envDataQueue, &payloadPtr, 0) != pdTRUE) {
+      Serial.println("Warning: Queue full, dropping payload.");
+      // CRITICAL: If the queue is full, delete the memory to prevent a leak
+      delete payloadPtr; 
+    }
   }
-
-  // put your main code here, to run repeatedly:
-
 }

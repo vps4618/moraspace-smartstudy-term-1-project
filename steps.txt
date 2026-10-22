@@ -16,7 +16,7 @@ development
     
     (open area - centra) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/occupancy/sync" -H "Content-Type: application/json"  -H "X-API-Key: YOUR_SECRET_KEY" -d "{\"area_id\": \"centra\", \"student_count\": \"25\"}"
 
-    (environment data ) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/env/sync" -H "Content-Type: application/json"  -H "X-API-Key: YOUR_SECRET_KEY" -d "{\"area_id\": \"centra\", \"aqi\": \"80\", \"temp\": \"30.5\", \"feels_like\": \"32.0\", \"humidity\": \"65.0\", \"noise\": \"55.0\"}"
+    (environment data ) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/env/sync" -H "Content-Type: application/json"  -H "X-API-Key: YOUR_SECRET_KEY" -d "{\"area_id\": \"centra\", \"aqi\": \"80\", \"temp\": \"30.5\", \"feels_like\": \"32.0\", \"humidity\": \"65.0\", \"noise\": \"55.0\", \"wifi\": \"True\", \"power\": \"False\"}"
 
 
 
