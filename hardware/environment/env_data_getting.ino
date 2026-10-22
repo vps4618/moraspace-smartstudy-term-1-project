@@ -236,7 +236,7 @@ void setup() {
     Serial.println("mDNS responder started: esp32sensors.local");
   }
 
-  server.begin();
+  //server.begin();
 
   // Clear stuck I2C bus lines before initializing Wire
   clearI2cBus();
