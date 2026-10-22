@@ -6,6 +6,10 @@
 #include "driver/adc.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <math.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include "secrets.h" // Your file with WIFI_SSID, WIFI_PASSWORD, and SECRET_API_KEY
 
 #define LED_PIN 32   //sharp sensor
 #define VO_PIN 34    // Corresponds to ADC1 Channel 6 (GPIO 34)
@@ -21,20 +25,13 @@
 
 #define SAMPLE_RATE 16000
 #define SAMPLE_COUNT 1024
-
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include "secrets.h" // Your file with WIFI_SSID, WIFI_PASSWORD, and SECRET_API_KEY
+//--------------web----------------------
 
 const char* serverUrl = "https://smartstudy-backend-psi.vercel.app/api/env/sync";
 
 // FreeRTOS queue to hold JSON strings waiting to be sent
 QueueHandle_t envDataQueue = nullptr;
-
-Adafruit_AHTX0 aht;       //ens+bme
-
-ScioSense_ENS160 ens160(ENS160_I2CADDR_1);  // 0x53
-
+//const char* SECRET_API_KEY =  "";
 
 // Create background HTTP Task
 void backendRequestTask(void *parameter) {
@@ -70,6 +67,19 @@ void backendRequestTask(void *parameter) {
 
 
 
+
+
+
+// ---------- Wi-Fi Credentials ----------
+//const char* ssid = "";
+//const char* password = "";
+//WiFiServer server(8888);
+
+Adafruit_AHTX0 aht;       //ens+bme
+
+ScioSense_ENS160 ens160(ENS160_I2CADDR_1);  // 0x53
+
+
 // ---------- I2C Bus Recovery Function ----------
 void clearI2cBus() {
   pinMode(SDA_PIN, INPUT_PULLUP);
@@ -86,6 +96,111 @@ void clearI2cBus() {
 
 
 
+
+
+// ---------- Custom Study Room Air Quality Score ----------
+
+// Keep a score within 0-100%
+float clampScore(float score) {
+  return constrain(score, 0.0f, 100.0f);
+}
+
+// Interpolate a score between two measurement thresholds
+float interpolateScore(float value,
+                       float x1, float score1,
+                       float x2, float score2) {
+  if (value <= x1) return score1;
+  if (value >= x2) return score2;
+
+  return score1 + (value - x1) *
+         (score2 - score1) / (x2 - x1);
+}
+
+// Dust score based on your Sharp sensor calibration
+float dustScore(float dust) {
+  if (dust <= 5)   return 100;
+  if (dust <= 10)  return interpolateScore(dust, 5, 95, 10, 80);
+  if (dust <= 35)  return interpolateScore(dust, 10, 80, 35, 60);
+  if (dust <= 55)  return interpolateScore(dust, 35, 60, 55, 40);
+  if (dust <= 125) return interpolateScore(dust, 55, 40, 125, 15);
+
+  return interpolateScore(dust, 125, 15, 200, 0);
+}
+
+// eCO2 score (ppm)
+// eCO2 is an estimate, not a direct CO2 measurement.
+float eco2Score(float eco2) {
+  if (eco2 <= 600)  return 100;
+  if (eco2 <= 1000) return interpolateScore(eco2, 600, 100, 1000, 80);
+  if (eco2 <= 1500) return interpolateScore(eco2, 1000, 80, 1500, 50);
+  if (eco2 <= 2500) return interpolateScore(eco2, 1500, 50, 2500, 20);
+
+  return interpolateScore(eco2, 2500, 20, 5000, 0);
+}
+
+// TVOC score (ppb)
+// Initial design thresholds; calibrate for your environment.
+float tvocScore(float tvoc) {
+  if (tvoc <= 65)  return 100;
+  if (tvoc <= 220) return interpolateScore(tvoc, 65, 100, 220, 75);
+  if (tvoc <= 660) return interpolateScore(tvoc, 220, 75, 660, 40);
+  if (tvoc <= 2200) return interpolateScore(tvoc, 660, 40, 2200, 0);
+
+  return 0;
+}
+
+// ENS160 AQI: 1 = best, 5 = worst
+float ensAqiScore(float aqi) {
+  if (aqi < 1 || aqi > 5) return 0;
+
+  return (5.0f - aqi) * 25.0f;
+}
+
+// Humidity score (%)
+// Target range: 40-60% RH
+float humidityScore(float hum) {
+  if (hum >= 40 && hum <= 60) return 100;
+
+  if (hum < 40)
+    return interpolateScore(hum, 20, 0, 40, 100);
+
+  return interpolateScore(hum, 60, 100, 90, 0);
+}
+
+// Combine all sensor scores into one percentage
+float calculateStudyAQI(float hum,
+                        float eco2,
+                        float tvoc,
+                        float aqi,
+                        float dust) {
+
+  float dust_s = dustScore(dust);
+  float eco2_s = eco2Score(eco2);
+  float tvoc_s = tvocScore(tvoc);
+  float aqi_s = ensAqiScore(aqi);
+  float hum_s = humidityScore(hum);
+
+  float total =
+      dust_s * 0.35f +
+      eco2_s * 0.25f +
+      tvoc_s * 0.20f +
+      aqi_s * 0.15f +
+      hum_s * 0.05f;
+
+  return clampScore(total);
+}
+
+String getAQILabel(float score) {
+  if (score >= 90) return "Excellent";
+  else if (score >= 75) return "Good";
+  else if (score >= 60) return "Moderate";
+  else if (score >= 40) return "Poor";
+  else return "Very Poor";
+}
+
+
+
+
 void setup() {
   Serial.begin(115200);
 
@@ -97,7 +212,7 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi connected.");
-
+  //-------------------------------------------
   // Buffer sensor events and send them in the background
   envDataQueue = xQueueCreate(5, sizeof(String*));
   if (envDataQueue != nullptr) {
@@ -112,6 +227,7 @@ void setup() {
   } else {
     Serial.println("Failed to create backend event queue.");
   }
+
 
   // ---------- mDNS Setup ----------
   if (!MDNS.begin("esp32sensors")) {
@@ -386,35 +502,118 @@ void loop() {
   //delay(10);
 
 
-
+  //sharp sensor calibrations,
   // 0-10 LOW(0-5 good , 5-10 normal)
   // 10-35 ELEVATED
   //35-55 HIGH
   //55-125 VERY HIGH
   // > 125  EXTREMELY HIGH FOR STUDY PLACE...
 
+    
+  
 
 
-  // =====================================================
+
+
+  float customAQI = calculateStudyAQI(
+      hum,
+      eco2,
+      tvoc,
+      aqi,
+      avgr
+  );
+
+
+
+//Dust (avgr)	35%	Particles and dust exposure
+//eCO₂ (eco2)	25%	Ventilation indicator
+//TVOC (tvoc)	20%	Gas and chemical pollution indicator
+//ENS160 AQI (aqi)	15%	Additional sensor-derived air-quality indicator
+//Humidity (hum)	5%	Indoor comfort and moisture
+
+
+
+//90–100%	Excellent
+//75–89%	Good
+//60–74%	Moderate
+//40–59%	Poor
+//0–39%	Very poor
+
+  String aqiLabel = getAQILabel(customAQI);
+
+
+
+
   // BUILD JSON PAYLOAD & QUEUE FOR BACKEND
   // =====================================================
   long rssi = WiFi.RSSI();
-  bool is_wifi_good = (rssi > -85);
-  float feels_like = temp + (hum * 0.05); // Rough heat index calculation
+  String w_s;
 
-  // Construct JSON to match FastAPI EnvTelemetry schema
+  if (rssi >= -50) {
+    w_s = "Excellent";
+  } 
+  else if (rssi >= -60) {
+    w_s = "Very Good";
+  } 
+  else if (rssi >= -67) {
+    w_s = "Good";
+  } 
+  else if (rssi >= -75) {
+    w_s = "Fair";
+  } 
+  else if (rssi >= -85) {
+    w_s = "Weak";
+  } 
+  else {
+    w_s = "Very Weak";
+  }
+  float T = temp * 9.0 / 5.0 + 32.0;  // Celsius to Fahrenheit
+
+  float HI = 0.5 * (T + 61.0 + ((T - 68.0) * 1.2)
+                  + (hum * 0.094));
+
+  if (HI >= 80.0) {
+    HI = -42.379
+         + 2.04901523 * T
+         + 10.14333127 * hum
+         - 0.22475541 * T * hum
+         - 0.00683783 * T * T
+         - 0.05481717 * hum * hum
+         + 0.00122874 * T * T * hum
+         + 0.00085282 * T * hum * hum
+         - 0.00000199 * T * T * hum * hum;
+
+    if (hum < 13.0 && T >= 80.0 && T <= 112.0) {
+        HI -= ((13.0 - hum) / 4.0)
+              * sqrt((17.0 - abs(T - 95.0)) / 17.0);
+    } 
+    else if (hum > 85.0 && T >= 80.0 && T <= 87.0) {
+        HI += ((hum - 85.0) / 10.0)
+              * ((87.0 - T) / 5.0);
+    }
+  }
+  float feels_like = (HI - 32.0) * 5.0 / 9.0;
+  // =====================================================
+  // BUILD JSON PAYLOAD
+  // =====================================================
   String jsonPayload = "{";
-  jsonPayload += "\"area_id\": \"apaya\","; 
-  jsonPayload += "\"aqi\":" + String(int(aqi)) + ",";
+  jsonPayload += "\"area_id\": \"library\","; 
   jsonPayload += "\"temp\":" + String(temp, 2) + ",";
   jsonPayload += "\"feels_like\":" + String(feels_like, 2) + ",";
   jsonPayload += "\"humidity\":" + String(hum, 2) + ",";
-  jsonPayload += "\"noise\":" + String(fin, 2) + ",";
-  jsonPayload += "\"wifi\":" + String(is_wifi_good ? "true" : "false") + ",";
+  jsonPayload += "\"custom_aqi_percent\":" + String(customAQI, 1) + ",";
+  jsonPayload += "\"custom_aqi_label\":\"" + aqiLabel + "\",";
+  jsonPayload += "\"eco2\":" + String(eco2, 2) + ",";
+  jsonPayload += "\"tvoc\":" + String(tvoc, 2) + ",";
+  jsonPayload += "\"ens_aqi\":" + String(int(aqi), 2) + ",";
+  jsonPayload += "\"dust_ug_m3\":" + String(avgr, 2) + ",";
+  jsonPayload += "\"noise_db\":" + String(fin, 2) + ",";
+  jsonPayload += "\"wifi\":" + String(w_s) + ",";
   jsonPayload += "\"power\": true";
   jsonPayload += "}";
 
-  Serial.println("Queuing data: " + jsonPayload);
+  // Send to Serial Monitor
+  Serial.println(jsonPayload);
 
   // Create a heap-allocated pointer of the string
   String* payloadPtr = new String(jsonPayload);
@@ -427,4 +626,7 @@ void loop() {
       delete payloadPtr; 
     }
   }
+
+  // put your main code here, to run repeatedly:
+
 }
