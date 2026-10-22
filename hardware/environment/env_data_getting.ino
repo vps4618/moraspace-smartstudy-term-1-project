@@ -605,10 +605,10 @@ void loop() {
   jsonPayload += "\"custom_aqi_label\":\"" + aqiLabel + "\",";
   jsonPayload += "\"eco2\":" + String(eco2, 2) + ",";
   jsonPayload += "\"tvoc\":" + String(tvoc, 2) + ",";
-  jsonPayload += "\"ens_aqi\":" + String(int(aqi), 2) + ",";
+  jsonPayload += "\"ens_aqi\":" + String(int(aqi)) + ",";
   jsonPayload += "\"dust_ug_m3\":" + String(avgr, 2) + ",";
   jsonPayload += "\"noise_db\":" + String(fin, 2) + ",";
-  jsonPayload += "\"wifi\":" + String(w_s) + ",";
+  jsonPayload += "\"wifi\":\"" + w_s + "\",";
   jsonPayload += "\"power\": true";
   jsonPayload += "}";
 
