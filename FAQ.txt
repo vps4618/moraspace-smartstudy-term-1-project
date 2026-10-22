@@ -1,0 +1,19 @@
+1. How to check wifi status and power ? 
+"
+extract the Wi-Fi signal strength (RSSI) from the ESP32 and use a "heartbeat" logic on your backend. 
+Because the ESP32 cannot send a message if it has no power, 
+the backend assumes power is True as long as it receives data, 
+and False if it stops receiving data for a set amount of time.
+"
+
+2. How to handle situation where ESP32 completely loss power or drop off the network ?
+
+"
+you would eventually want to add a 'last_updated' timestamp to your database. A background task in FastAPI can periodically check if 'last_updated' is older than 2 minutes, and automatically flip "power": False and "wifi": False in the database.
+"
+
+3. How API-key stored ? 
+
+"
+they stored in secret files and added to .gitignore
+"

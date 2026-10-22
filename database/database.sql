@@ -262,3 +262,42 @@ COMMIT;
 
 /* ✅mechn bn mn krl thiyenne hrid den user onn agaharuwd dwsk aw ub backend eken request ekk dunnm database eken pahugiy sathi dekk e agaharuwda dwse kohomd kattiy 
 idl thiyenne kiyl blnw itpsse hodm welwl thunk reccomend krnw oni nm ek adu wedi krgnn puluwn mn ❌ lakunkin dl thiyen then default ek wens krl */
+ALTER TABLE study_areas 
+ADD COLUMN power_available BOOLEAN NOT NULL DEFAULT TRUE,
+ADD COLUMN last_sync TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+DROP VIEW IF EXISTS v_current_occupancy;
+CREATE VIEW v_current_occupancy AS
+SELECT
+    a.id AS study_area_id,
+    a.name,
+    a.slug,
+    a.wifi_available,
+    a.power_available,   -- NEW
+    a.last_sync,         -- NEW
+    a.capacity,
+    COALESCE(s.student_count, 0) AS student_count,
+    COALESCE(s.aqi, 50) AS aqi,
+    COALESCE(s.temp, 25.0) AS temp,
+    COALESCE(s.feels_like, 26.0) AS feels_like,
+    COALESCE(s.humidity, 60.0) AS humidity,
+    COALESCE(s.noise, 45.0) AS noise,
+    s.recorded_at,
+    ROUND((COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100, 1) AS occupancy_percent,
+    GREATEST(a.capacity - COALESCE(s.student_count, 0), 0) AS seats_available,
+    CASE
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 40 THEN 'Quiet'
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 70 THEN 'Moderate'
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 90 THEN 'Busy'
+        ELSE 'Full'
+    END AS level
+FROM study_areas a
+LEFT JOIN LATERAL (
+    SELECT student_count, aqi, temp, feels_like, humidity, noise, recorded_at
+    FROM occupancy_snapshots o
+    WHERE o.study_area_id = a.id
+    ORDER BY o.recorded_at DESC
+    LIMIT 1
+) s ON TRUE
+WHERE a.is_active = TRUE
+ORDER BY a.id;

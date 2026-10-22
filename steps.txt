@@ -14,9 +14,9 @@ development
     ----------
     (simulate esp32) (close area - apaya) -  curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/sensor/event" -H "Content-Type: application/json" -H "X-API-Key:your_key" -d "{\"area id\": \"apaya\", \"event\": \"ENTER\"}"
     
-    (open area - centra) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/sensor/event" -H "Content-Type: application/json" -H "X-API-Key:your_key" -d "{\"area id\": \"centra\", \"student_count\": \"{value}\"}"
+    (open area - centra) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/occupancy/sync" -H "Content-Type: application/json"  -H "X-API-Key: YOUR_SECRET_KEY" -d "{\"area_id\": \"centra\", \"student_count\": \"25\"}"
 
-
+    (environment data ) - curl.exe --% -X POST "https://smartstudy-backend-psi.vercel.app/api/env/sync" -H "Content-Type: application/json"  -H "X-API-Key: YOUR_SECRET_KEY" -d "{\"area_id\": \"centra\", \"aqi\": \"80\", \"temp\": \"30.5\", \"feels_like\": \"32.0\", \"humidity\": \"65.0\", \"noise\": \"55.0\"}"
 
 
 
@@ -80,3 +80,13 @@ vercel hosting
 
 # websockets removed as vercel dont support that
 # CORS (Cross-Origin Resource Sharing) error fixed
+
+
+
+26/10/22
+-------------
+# intial final steps done - frontend backend connected.
+# buddhisha ayya env data fixed
+# supabase account created (for postgre sql) - account password is api key
+# security added using .env
+# database connected 

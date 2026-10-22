@@ -1,0 +1,6 @@
+download package
+------------------
+pip install requests
+pip install python-dotenv
+
+# if use git , add .env to .gitignore

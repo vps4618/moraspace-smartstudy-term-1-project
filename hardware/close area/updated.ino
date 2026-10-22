@@ -36,7 +36,7 @@ void sendSensorEvent(String eventType) {
     http.addHeader("X-API-Key", SECRET_API_KEY);
     
     // Format the JSON payload exactly as the FastAPI endpoint expects it
-    String payload = "{\"area id\": \"LIBRARY 01\", \"event\": \"" + eventType + "\"}";
+    String payload = "{\"area id\": \"apaya\", \"event\": \"" + eventType + "\"}";
     
     int httpResponseCode = http.POST(payload);
     

@@ -1,8 +1,14 @@
 import os
-from fastapi import FastAPI , HTTPException , Security , Depends , WebSocket , WebSocketDisconnect , Query
+import asyncio
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security.api_key import APIKeyHeader
-from schemas import SensorEvent,mock_db, OccupancySync , EnvTelemetry
 from fastapi.middleware.cors import CORSMiddleware
+from schemas import SensorEvent, OccupancySync, EnvTelemetry
+
+
 
 # ! Disable the /docs , /redoc, and openapi.json routes in production
 app = FastAPI(docs_url=None,redoc_url=None,openapi_url=None,title = "SmartStudy Backend")
@@ -16,6 +22,8 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all custom headers (including X-API-Key)
 )
 
+# Load DB URL
+DATABASE_URL = os.getenv("DATABASE_URL")
 # Define a strong secret key (Do not share this publicly)
 SECRET_API_KEY = os.getenv("API")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
@@ -31,79 +39,152 @@ def verify_api_key(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Access forbidden: Invalid API Key")
     return api_key
 
+def get_db():
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# ENDPOINTS
+# ---------------------------------------------------------   
 # info page
 @app.get("/")
 def root():
     return {"status" : "SmartStudy API online"}
 
 # gathering posted data and update db
-# async await added for websocket
 @app.post("/api/sensor/event")
-async def handle_sensor_event(event_data : SensorEvent, api_key: str = Depends(verify_api_key)):
-    # 1. Process the event and update mock_db
-    area_id = event_data.area_id
+async def handle_sensor_event(event_data: SensorEvent, db=Depends(get_db), api_key: str = Depends(verify_api_key)):
+    cur = db.cursor()
+    try:
+        # 1. Get the current capacity and the latest student count
+        cur.execute("""
+            SELECT a.capacity, COALESCE(s.student_count, 0) as current_count
+            FROM study_areas a
+            LEFT JOIN LATERAL (
+                SELECT student_count FROM occupancy_snapshots 
+                WHERE study_area_id = a.id 
+                ORDER BY recorded_at DESC LIMIT 1
+            ) s ON TRUE
+            WHERE a.slug = %s;
+        """, (event_data.area_id,))
+        
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Study area not found")
+            
+        capacity = row["capacity"]
+        current_count = row["current_count"]
+        
+        # 2. Calculate the new count safely
+        if event_data.event == "ENTER":
+            new_count = current_count + 1 if current_count < capacity else capacity
+        elif event_data.event == "EXIT":
+            new_count = current_count - 1 if current_count > 0 else 0
+        else:
+            new_count = current_count
+            
+        # 3. Save the new count using Chamika's custom function
+        cur.execute("SELECT record_occupancy(%s, %s);", (event_data.area_id, new_count))
+        
+        # 4. Update the heartbeat since the sensor just communicated
+        cur.execute("UPDATE study_areas SET last_sync = NOW() WHERE slug = %s;", (event_data.area_id,))
+        
+        db.commit()
+        
+        return {
+            "area_id": event_data.area_id,
+            "new_occupancy": new_count,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-    if area_id not in mock_db:
-        raise HTTPException(status_code=404 , detail = "Study area not found")
 
-    area = mock_db[area_id]
-
-    if event_data.event == "ENTER":
-        if area["students"] < area["capacity"]:
-            area["students"] += 1
-    elif event_data.event == "EXIT":
-        if area["students"] > 0:
-            area["students"] -= 1
-
-    # 2. Format the payload that want the frontend to receive
-    live_update = {
-        "area_id": event_data.area_id,
-        "new_occupancy": area["students"],
-        "status": "success"
-    }
-    return live_update
-
-# displaying study area details
 @app.get("/api/study-areas")
-def get_study_areas():
-    return mock_db
+def get_study_areas(db=Depends(get_db)):
+    cur = db.cursor()
 
-# displaying recommendations
-@app.get("/api/recommendations")
-def get_recommendations():
-    results = []
-    for area_id, data in mock_db.items():
-        availability_ratio = (data["capacity"] - data["current_occupancy"]) / data["capacity"]
-        
-        # Calculate base score (adjust with actual DB metrics later)
-        score = (0.40 * availability_ratio) + (0.15 * int(data["wifi"])) + (0.10 * int(data["power"]))
-        
-        results.append({"area_id": area_id, "score": score, "current_occupancy": data["current_occupancy"]})
+    # 1. Execute the heartbeat check exactly when the user loads the dashboard
+    cur.execute("""
+        UPDATE study_areas
+        SET wifi_available = FALSE, power_available = FALSE
+        WHERE last_sync < NOW() - INTERVAL '2 minutes'
+        AND (wifi_available = TRUE OR power_available = TRUE);
+    """)
+    db.commit()
     
-    # Sort descending by score
-    return sorted(results, key=lambda x: x["score"], reverse=True)
+    cur.execute("SELECT * FROM v_current_occupancy;")
+    rows = cur.fetchall()
+    
+    # Format exactly as Nisal's frontend expects
+    dashboard_data = {}
+    for row in rows:
+        # Recreating Thareen's basic score logic
+        availability_ratio = row["seats_available"] / row["capacity"]
+        score = (0.40 * availability_ratio) + (0.15 * int(row["wifi_available"])) + (0.10 * int(row["power_available"]))
+        # Normalize score to 100
+        overall_score = min(int(score * 100), 100) 
 
+        dashboard_data[row["slug"]] = {
+            "capacity": row["capacity"],
+            "students": row["student_count"],
+            "wifi": row["wifi_available"],
+            "power": row["power_available"],
+            "aqi": row["aqi"],
+            "temp": float(row["temp"]),
+            "feelsLike": float(row["feels_like"]),
+            "humidity": float(row["humidity"]),
+            "noise": float(row["noise"]),
+            "overall": overall_score
+        }
+    return dashboard_data
 
-# for open area
 @app.post("/api/occupancy/sync")
-async def sync_occupancy(data: OccupancySync, api_key: str = Depends(verify_api_key)):
-    if data.area_id not in mock_db:
-        raise HTTPException(status_code=404, detail="Area not found")
-    mock_db[data.area_id]["students"] = data.student_count
-    # If using PostgreSQL: execute "SELECT record_occupancy(%s, %s)" with (data.area_id, data.student_count)
+async def sync_occupancy(data: OccupancySync, db=Depends(get_db), api_key: str = Depends(verify_api_key)):
+    cur = db.cursor()
+    try:
+        # Call Chamika's custom Postgres function
+        cur.execute("SELECT record_occupancy(%s, %s);", (data.area_id, data.student_count))
+        
+        # Also update the heartbeat since the camera sent data
+        cur.execute("UPDATE study_areas SET last_sync = NOW() WHERE slug = %s", (data.area_id,))
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
     return {"status": "updated", "count": data.student_count}
 
-# for taking environment data
 @app.post("/api/env/sync")
-async def sync_environment(data: EnvTelemetry, api_key: str = Depends(verify_api_key)):
-    if data.area_id not in mock_db:
-        raise HTTPException(status_code=404, detail="Area not found")
-    # Update the dictionary / database with new environmental metrics
-    mock_db[data.area_id].update({
-        "aqi": data.aqi,
-        "temp": data.temp,
-        "feelsLike": data.feels_like,
-        "humidity": data.humidity,
-        "noise": data.noise
-    })
+async def sync_environment(data: EnvTelemetry, db=Depends(get_db), api_key: str = Depends(verify_api_key)):
+    cur = db.cursor()
+    try:
+        # 1. Update the study_areas table heartbeat and statuses
+        cur.execute("""
+            UPDATE study_areas 
+            SET last_sync = NOW(), wifi_available = %s, power_available = %s 
+            WHERE slug = %s
+        """, (data.wifi, data.power, data.area_id))
+        
+        # 2. Insert the environmental data into occupancy_snapshots
+        # We inherit the last known student count so we don't accidentally set it to 0
+        cur.execute("""
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, aqi, temp, feels_like, humidity, noise)
+            SELECT id, 
+                   COALESCE((SELECT student_count FROM occupancy_snapshots WHERE study_area_id = study_areas.id ORDER BY recorded_at DESC LIMIT 1), 0), 
+                   %s, %s, %s, %s, %s
+            FROM study_areas WHERE slug = %s
+        """, (data.aqi, data.temp, data.feels_like, data.humidity, data.noise, data.area_id))
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+        
     return {"status": "env_updated"}
