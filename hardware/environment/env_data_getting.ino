@@ -594,7 +594,7 @@ void loop() {
   }
   float feels_like = (HI - 32.0) * 5.0 / 9.0;
   // =====================================================
-  // BUILD JSON PAYLOAD
+  // BUILD JSON PAYLOAD mewwa wenas keranne na na namai
   // =====================================================
   String jsonPayload = "{";
   jsonPayload += "\"area_id\": \"library\","; 
