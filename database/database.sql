@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS occupancy_snapshots (
     feels_like       NUMERIC(4,1) DEFAULT 26.0,
     humidity         NUMERIC(4,1) DEFAULT 60.0,
     noise            NUMERIC(4,1) DEFAULT 45.0,
+    custom_aqi_percent DOUBLE PRECISION,
+    custom_aqi_label   TEXT,
+    eco2               DOUBLE PRECISION,
+    tvoc               DOUBLE PRECISION,
+    ens_aqi            INTEGER,
+    dust_ug_m3         DOUBLE PRECISION,
     recorded_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -265,6 +271,7 @@ idl thiyenne kiyl blnw itpsse hodm welwl thunk reccomend krnw oni nm ek adu wedi
 ALTER TABLE study_areas 
 ADD COLUMN power_available BOOLEAN NOT NULL DEFAULT TRUE,
 ADD COLUMN last_sync TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ADD COLUMN IF NOT EXISTS wifi_quality TEXT;
 
 DROP VIEW IF EXISTS v_current_occupancy;
 CREATE VIEW v_current_occupancy AS
@@ -278,6 +285,13 @@ SELECT
     a.capacity,
     COALESCE(s.student_count, 0) AS student_count,
     COALESCE(s.aqi, 50) AS aqi,
+    -- NEW environmental fields
+    s.custom_aqi_percent,
+    s.custom_aqi_label,
+    s.eco2,
+    s.tvoc,
+    s.ens_aqi,
+    s.dust_ug_m3,
     COALESCE(s.temp, 25.0) AS temp,
     COALESCE(s.feels_like, 26.0) AS feels_like,
     COALESCE(s.humidity, 60.0) AS humidity,
@@ -293,7 +307,20 @@ SELECT
     END AS level
 FROM study_areas a
 LEFT JOIN LATERAL (
-    SELECT student_count, aqi, temp, feels_like, humidity, noise, recorded_at
+    SELECT
+        student_count,
+        aqi,
+        custom_aqi_percent,
+        custom_aqi_label,
+        eco2,
+        tvoc,
+        ens_aqi,
+        dust_ug_m3,
+        temp,
+        feels_like,
+        humidity,
+        noise,
+        recorded_at
     FROM occupancy_snapshots o
     WHERE o.study_area_id = a.id
     ORDER BY o.recorded_at DESC
