@@ -329,3 +329,26 @@ async def sync_environment(
 
     finally:
         cur.close()
+
+
+@app.get("/api/recommendations")
+def get_recommend_times(area: str = None, top: int = 3, db=Depends(get_db)):
+    cur = db.cursor()
+    try:
+        # Calls the SQL function: recommend_study_times(p_area_name, p_day_of_week, p_top)
+        cur.execute("SELECT * FROM recommend_study_times(%s, NULL, %s);", (area, top))
+        rows = cur.fetchall()
+        
+        recommendations = []
+        for row in rows:
+            recommendations.append({
+                "area_name": row["area_name"],
+                "time_window": row["time_window"],
+                "typical_count": float(row["typical_count"]),
+                "level": row["level"]
+            })
+            
+        return {"recommendations": recommendations}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
