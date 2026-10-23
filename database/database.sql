@@ -374,3 +374,58 @@ WHERE a.is_active = TRUE
 ORDER BY a.id;
 
 
+DROP VIEW IF EXISTS v_current_occupancy;
+CREATE VIEW v_current_occupancy AS
+SELECT
+    a.id AS study_area_id,
+    a.name,
+    a.slug,
+    a.wifi_available,
+    a.wifi_quality,      -- THIS IS THE MISSING LINE
+    a.power_available,   
+    a.last_sync,         
+    a.capacity,
+    COALESCE(s.student_count, 0) AS student_count,
+    COALESCE(s.aqi, 50) AS aqi,
+    s.custom_aqi_percent,
+    s.custom_aqi_label,
+    s.eco2,
+    s.tvoc,
+    s.ens_aqi,
+    s.dust_ug_m3,
+    COALESCE(s.temp, 25.0) AS temp,
+    COALESCE(s.feels_like, 26.0) AS feels_like,
+    COALESCE(s.humidity, 60.0) AS humidity,
+    COALESCE(s.noise, 45.0) AS noise,
+    s.recorded_at,
+    ROUND((COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100, 1) AS occupancy_percent,
+    GREATEST(a.capacity - COALESCE(s.student_count, 0), 0) AS seats_available,
+    CASE
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 40 THEN 'Quiet'
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 70 THEN 'Moderate'
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 90 THEN 'Busy'
+        ELSE 'Full'
+    END AS level
+FROM study_areas a
+LEFT JOIN LATERAL (
+    SELECT
+        student_count,
+        aqi,
+        custom_aqi_percent,
+        custom_aqi_label,
+        eco2,
+        tvoc,
+        ens_aqi,
+        dust_ug_m3,
+        temp,
+        feels_like,
+        humidity,
+        noise,
+        recorded_at
+    FROM occupancy_snapshots o
+    WHERE o.study_area_id = a.id
+    ORDER BY o.recorded_at DESC
+    LIMIT 1
+) s ON TRUE
+WHERE a.is_active = TRUE
+ORDER BY a.id;

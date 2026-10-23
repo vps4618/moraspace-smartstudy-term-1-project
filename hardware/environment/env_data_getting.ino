@@ -597,7 +597,7 @@ void loop() {
   // BUILD JSON PAYLOAD mewwa wenas keranne na na namai
   // =====================================================
   String jsonPayload = "{";
-  jsonPayload += "\"area_id\": \"library\","; 
+  jsonPayload += "\"area_id\": \"centra\","; 
   jsonPayload += "\"temp\":" + String(temp, 2) + ",";
   jsonPayload += "\"feels_like\":" + String(feels_like, 2) + ",";
   jsonPayload += "\"humidity\":" + String(hum, 2) + ",";
