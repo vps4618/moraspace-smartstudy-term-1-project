@@ -124,18 +124,28 @@ def get_study_areas(db=Depends(get_db)):
         # Format exactly as Nisal's frontend expects
         dashboard_data = {}
         for row in rows:
-            # Recreating Thareen's basic score logic
+            # Recreating Thareen's basic score logic (assuming wifi_quality is a string)
             availability_ratio = row["seats_available"] / row["capacity"]
-            score = (0.40 * availability_ratio) + (0.15 * int(row["wifi_available"])) + (0.10 * int(row["power_available"]))
-            # Normalize score to 100
+            wifi_score = 0.15 if row["wifi_quality"] in ["Excellent", "Good", "Fair"] else 0.0
+            
+            score = (0.40 * availability_ratio) + wifi_score + (0.10 * int(row["power_available"]))
             overall_score = min(int(score * 100), 100) 
 
             dashboard_data[row["slug"]] = {
                 "capacity": row["capacity"],
                 "students": row["student_count"],
-                "wifi": row["wifi_available"],
+                "wifi": row["wifi_quality"], # Updated
                 "power": row["power_available"],
-                "aqi": row["aqi"],
+                
+                # New Environmental Fields
+                "custom_aqi_percent": float(row["custom_aqi_percent"] or 0),
+                "custom_aqi_label": row["custom_aqi_label"] or "Unknown",
+                "eco2": float(row["eco2"] or 0),
+                "tvoc": float(row["tvoc"] or 0),
+                "ens_aqi": int(row["ens_aqi"] or 0),
+                "dust_ug_m3": float(row["dust_ug_m3"] or 0),
+                
+                # Original Environmental Fields
                 "temp": float(row["temp"]),
                 "feelsLike": float(row["feels_like"]),
                 "humidity": float(row["humidity"]),
@@ -167,30 +177,155 @@ async def sync_occupancy(data: OccupancySync, db=Depends(get_db), api_key: str =
     
     return {"status": "updated", "count": data.student_count}
 
+
 @app.post("/api/env/sync")
-async def sync_environment(data: EnvTelemetry, db=Depends(get_db), api_key: str = Depends(verify_api_key)):
+async def sync_environment(
+    data: EnvTelemetry,
+    db=Depends(get_db),
+    api_key: str = Depends(verify_api_key)
+):
     cur = db.cursor()
+
     try:
-        # 1. Update the study_areas table heartbeat and statuses
-        cur.execute("""
-            UPDATE study_areas 
-            SET last_sync = NOW(), wifi_available = %s, power_available = %s 
+        # 1. Convert Wi-Fi quality into a Boolean status.
+        # The original dashboard still expects wifi_available
+        # to be TRUE or FALSE.
+
+        valid_wifi_levels = {
+            "Excellent",
+            "Very Good",
+            "Good",
+            "Fair",
+            "Weak",
+            "Very Weak"
+        }
+
+        wifi_quality = data.wifi.strip()
+
+        if wifi_quality not in valid_wifi_levels:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid Wi-Fi quality value"
+            )
+
+        wifi_available = wifi_quality != "Very Weak"
+
+        # 2. Update study area status and heartbeat.
+
+        cur.execute(
+            """
+            UPDATE study_areas
+            SET
+                last_sync = NOW(),
+                wifi_available = %s,
+                wifi_quality = %s,
+                power_available = %s
             WHERE slug = %s
-        """, (data.wifi, data.power, data.area_id))
-        
-        # 2. Insert the environmental data into occupancy_snapshots
-        # We inherit the last known student count so we don't accidentally set it to 0
-        cur.execute("""
-            INSERT INTO occupancy_snapshots (study_area_id, student_count, aqi, temp, feels_like, humidity, noise)
-            SELECT id, 
-                   COALESCE((SELECT student_count FROM occupancy_snapshots WHERE study_area_id = study_areas.id ORDER BY recorded_at DESC LIMIT 1), 0), 
-                   %s, %s, %s, %s, %s
-            FROM study_areas WHERE slug = %s
-        """, (data.aqi, data.temp, data.feels_like, data.humidity, data.noise, data.area_id))
-        
+            RETURNING id;
+            """,
+            (
+                wifi_available,
+                wifi_quality,
+                data.power,
+                data.area_id
+            )
+        )
+
+        area = cur.fetchone()
+
+        if not area:
+            raise HTTPException(
+                status_code=404,
+                detail="Study area not found"
+            )
+
+        # 3. Save environmental measurements.
+        # Preserve the last known student count.
+        # Keep the existing aqi and noise columns compatible
+        # with the current dashboard.
+
+        cur.execute(
+            """
+            INSERT INTO occupancy_snapshots (
+                study_area_id,
+                student_count,
+                aqi,
+                temp,
+                feels_like,
+                humidity,
+                noise,
+                custom_aqi_percent,
+                custom_aqi_label,
+                eco2,
+                tvoc,
+                ens_aqi,
+                dust_ug_m3
+            )
+            VALUES (
+                %s,
+                COALESCE(
+                    (
+                        SELECT student_count
+                        FROM occupancy_snapshots
+                        WHERE study_area_id = %s
+                        ORDER BY recorded_at DESC
+                        LIMIT 1
+                    ),
+                    0
+                ),
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+            );
+            """,
+            (
+                area["id"],
+                area["id"],
+                data.custom_aqi_percent,
+                data.temp,
+                data.feels_like,
+                data.humidity,
+                data.noise_db,
+                data.custom_aqi_percent,
+                data.custom_aqi_label,
+                data.eco2,
+                data.tvoc,
+                data.ens_aqi,
+                data.dust_ug_m3
+            )
+        )
+
+        # 4. Commit both database updates.
+
         db.commit()
+
+        return {
+            "status": "env_updated",
+            "area_id": data.area_id,
+            "custom_aqi_percent": data.custom_aqi_percent,
+            "custom_aqi_label": data.custom_aqi_label,
+            "wifi_quality": wifi_quality
+        }
+
+    except HTTPException:
+        db.rollback()
+        raise
+
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-        
-    return {"status": "env_updated"}
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Environment sync failed: {str(e)}"
+        )
+
+    finally:
+        cur.close()
