@@ -429,3 +429,181 @@ LEFT JOIN LATERAL (
 ) s ON TRUE
 WHERE a.is_active = TRUE
 ORDER BY a.id;
+
+
+-- dummy data for recommendations
+-- It generates 14 days of hourly synthetic snapshots, creating opposite occupancy patterns for Apaya and Centra so the engine has distinct trends to output.
+DO $$
+DECLARE
+    curr_time TIMESTAMPTZ := NOW() - INTERVAL '14 days';
+    end_time TIMESTAMPTZ := NOW();
+    apaya_id INT;
+    centra_id INT;
+BEGIN
+    SELECT id INTO apaya_id FROM study_areas WHERE slug = 'apaya';
+    SELECT id INTO centra_id FROM study_areas WHERE slug = 'centra';
+
+    WHILE curr_time < end_time LOOP
+        -- Pattern 1: Apaya is Quiet in the morning (5-10 students), Busy in afternoon (40-55 students)
+        IF EXTRACT(HOUR FROM curr_time) BETWEEN 8 AND 12 THEN
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (apaya_id, floor(random() * 5 + 5)::int, curr_time);
+        ELSIF EXTRACT(HOUR FROM curr_time) BETWEEN 13 AND 21 THEN
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (apaya_id, floor(random() * 15 + 40)::int, curr_time);
+        END IF;
+
+        -- Pattern 2: Centra is Busy in the morning (35-45 students), Quiet in evening (5-15 students)
+        IF EXTRACT(HOUR FROM curr_time) BETWEEN 8 AND 15 THEN
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (centra_id, floor(random() * 10 + 35)::int, curr_time);
+        ELSIF EXTRACT(HOUR FROM curr_time) BETWEEN 16 AND 21 THEN
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (centra_id, floor(random() * 10 + 5)::int, curr_time);
+        END IF;
+
+        -- Advance time by 1 hour
+        curr_time := curr_time + INTERVAL '1 hour';
+    END LOOP;
+END $$;
+
+-- updated because not populating error
+CREATE OR REPLACE FUNCTION record_occupancy(
+    p_area   TEXT,
+    p_count  INTEGER
+) RETURNS BIGINT AS $$
+DECLARE
+    v_area_id INTEGER;
+    v_snap_id BIGINT;
+BEGIN
+    SELECT id INTO v_area_id
+    FROM study_areas
+    WHERE (LOWER(slug) = LOWER(p_area) OR LOWER(name) = LOWER(p_area))
+      AND is_active = TRUE;
+
+    IF v_area_id IS NULL THEN
+        RAISE EXCEPTION 'Study area not found: %', p_area;
+    END IF;
+
+    -- Insert the new count while inheriting the last known environmental data
+    INSERT INTO occupancy_snapshots (
+        study_area_id, student_count, aqi, temp, feels_like, humidity, noise,
+        custom_aqi_percent, custom_aqi_label, eco2, tvoc, ens_aqi, dust_ug_m3
+    )
+    SELECT 
+        v_area_id, 
+        GREATEST(p_count, 0),
+        aqi, temp, feels_like, humidity, noise,
+        custom_aqi_percent, custom_aqi_label, eco2, tvoc, ens_aqi, dust_ug_m3
+    FROM occupancy_snapshots 
+    WHERE study_area_id = v_area_id 
+    ORDER BY recorded_at DESC 
+    LIMIT 1
+    RETURNING id INTO v_snap_id;
+
+    RETURN v_snap_id;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- updated because not populating error
+DROP VIEW IF EXISTS v_current_occupancy;
+CREATE VIEW v_current_occupancy AS
+SELECT
+    a.id AS study_area_id,
+    a.name,
+    a.slug,
+    a.wifi_available,
+    a.wifi_quality,      
+    a.power_available,   
+    a.last_sync,         
+    a.capacity,
+    COALESCE(s.student_count, 0) AS student_count,
+    COALESCE(s.aqi, 50) AS aqi,
+    COALESCE(s.custom_aqi_percent, 0.0) AS custom_aqi_percent,
+    COALESCE(s.custom_aqi_label, 'Unknown') AS custom_aqi_label,
+    COALESCE(s.eco2, 0.0) AS eco2,
+    COALESCE(s.tvoc, 0.0) AS tvoc,
+    COALESCE(s.ens_aqi, 0) AS ens_aqi,
+    COALESCE(s.dust_ug_m3, 0.0) AS dust_ug_m3,
+    COALESCE(s.temp, 25.0) AS temp,
+    COALESCE(s.feels_like, 26.0) AS feels_like,
+    COALESCE(s.humidity, 60.0) AS humidity,
+    COALESCE(s.noise, 45.0) AS noise,
+    s.recorded_at,
+    ROUND((COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100, 1) AS occupancy_percent,
+    GREATEST(a.capacity - COALESCE(s.student_count, 0), 0) AS seats_available,
+    CASE
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 40 THEN 'Quiet'
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 70 THEN 'Moderate'
+        WHEN (COALESCE(s.student_count, 0)::NUMERIC / a.capacity) * 100 < 90 THEN 'Busy'
+        ELSE 'Full'
+    END AS level
+FROM study_areas a
+LEFT JOIN LATERAL (
+    SELECT
+        student_count,
+        aqi,
+        custom_aqi_percent,
+        custom_aqi_label,
+        eco2,
+        tvoc,
+        ens_aqi,
+        dust_ug_m3,
+        temp,
+        feels_like,
+        humidity,
+        noise,
+        recorded_at
+    FROM occupancy_snapshots o
+    WHERE o.study_area_id = a.id
+    ORDER BY o.recorded_at DESC
+    LIMIT 1
+) s ON TRUE
+WHERE a.is_active = TRUE
+ORDER BY a.id;
+
+
+-- add dummy data for chart
+DO $$
+DECLARE
+    curr_time TIMESTAMPTZ := NOW() - INTERVAL '20 days';
+    end_time TIMESTAMPTZ := NOW();
+    apaya_id INT;
+    centra_id INT;
+BEGIN
+    -- Fetch the correct internal IDs for the study areas
+    SELECT id INTO apaya_id FROM study_areas WHERE slug = 'apaya';
+    SELECT id INTO centra_id FROM study_areas WHERE slug = 'centra';
+
+    WHILE curr_time < end_time LOOP
+        -- ==========================================
+        -- APAYA PATTERN: Busy Mornings, Quiet Afternoons
+        -- ==========================================
+        IF EXTRACT(HOUR FROM curr_time) BETWEEN 8 AND 12 THEN
+            -- 8 AM to 1 PM: Highly occupied (40-55 students)
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (apaya_id, floor(random() * 15 + 40)::int, curr_time);
+        ELSIF EXTRACT(HOUR FROM curr_time) BETWEEN 13 AND 19 THEN
+            -- 1 PM to 7 PM: Mostly empty (10-20 students)
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (apaya_id, floor(random() * 10 + 10)::int, curr_time);
+        END IF;
+
+        -- ==========================================
+        -- CENTRA PATTERN: Quiet Mornings, Busy Afternoons
+        -- ==========================================
+        IF EXTRACT(HOUR FROM curr_time) BETWEEN 8 AND 12 THEN
+            -- 8 AM to 1 PM: Lightly occupied (15-25 students)
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (centra_id, floor(random() * 10 + 15)::int, curr_time);
+        ELSIF EXTRACT(HOUR FROM curr_time) BETWEEN 13 AND 19 THEN
+            -- 1 PM to 7 PM: Highly occupied (35-50 students)
+            INSERT INTO occupancy_snapshots (study_area_id, student_count, recorded_at) 
+            VALUES (centra_id, floor(random() * 15 + 35)::int, curr_time);
+        END IF;
+
+        -- Advance the loop by 1 hour
+        curr_time := curr_time + INTERVAL '1 hour';
+    END LOOP;
+END $$;

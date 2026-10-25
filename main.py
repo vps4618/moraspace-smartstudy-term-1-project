@@ -352,3 +352,44 @@ def get_recommend_times(area: str = None, top: int = 3, db=Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+# for chart.js data
+@app.get("/api/trends")
+def get_historical_trends(area: str = None, db=Depends(get_db)):
+    cur = db.cursor()
+    try:
+        # Group the last 14 days of data into 4 shifts and calculate average capacity %
+        cur.execute("""
+            WITH shifts AS (
+                SELECT 
+                    CASE 
+                        WHEN EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') >= 8 AND EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') < 10 THEN 'shift_1'
+                        WHEN EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') >= 10 AND EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') < 13 THEN 'shift_2'
+                        WHEN EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') >= 13 AND EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') < 16 THEN 'shift_3'
+                        WHEN EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') >= 16 AND EXTRACT(HOUR FROM o.recorded_at AT TIME ZONE 'Asia/Colombo') < 19 THEN 'shift_4'
+                    END AS shift,
+                    (o.student_count::NUMERIC / a.capacity) * 100 AS pct
+                FROM occupancy_snapshots o
+                JOIN study_areas a ON o.study_area_id = a.id
+                WHERE o.recorded_at >= NOW() - INTERVAL '14 days'
+                  AND (%s IS NULL OR a.slug = %s)
+            )
+            SELECT shift, ROUND(AVG(pct), 1) as avg_pct
+            FROM shifts
+            WHERE shift IS NOT NULL
+            GROUP BY shift;
+        """, (area, area))
+        
+        rows = cur.fetchall()
+        
+        # Default empty structure if no data exists yet
+        trends = {"shift_1": 0.0, "shift_2": 0.0, "shift_3": 0.0, "shift_4": 0.0}
+        
+        for row in rows:
+            trends[row["shift"]] = float(row["avg_pct"])
+            
+        return trends
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
