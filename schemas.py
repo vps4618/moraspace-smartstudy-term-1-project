@@ -37,3 +37,10 @@ class EnvTelemetry(BaseModel):
     # Connectivity
     wifi: str
     power: bool
+
+
+# for admin capacity updates
+class CapacityUpdate(BaseModel):
+    area_id: str
+    capacity: int
+    

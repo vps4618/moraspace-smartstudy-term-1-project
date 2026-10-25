@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from schemas import SensorEvent, OccupancySync, EnvTelemetry
+from schemas import SensorEvent, OccupancySync, EnvTelemetry , CapacityUpdate
 
 
 
@@ -393,3 +393,28 @@ def get_historical_trends(area: str = None, db=Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/api/admin/capacity")
+async def update_capacity(
+    data: CapacityUpdate, 
+    db=Depends(get_db), 
+    api_key: str = Depends(verify_api_key) # This secures the endpoint!
+):
+    cur = db.cursor()
+    try:
+        cur.execute(
+            "UPDATE study_areas SET capacity = %s WHERE slug = %s RETURNING id;",
+            (data.capacity, data.area_id)
+        )
+        
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Study area not found")
+            
+        db.commit()
+        return {
+            "status": "success", 
+            "message": f"{data.area_id} capacity updated to {data.capacity}"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
