@@ -150,7 +150,8 @@ def get_study_areas(db=Depends(get_db)):
                 "feelsLike": float(row["feels_like"]),
                 "humidity": float(row["humidity"]),
                 "noise": float(row["noise"]),
-                "overall": overall_score
+                "overall": overall_score,
+                "level": row["level"] # <-- ADD THIS LINE
             }
         return dashboard_data
         
