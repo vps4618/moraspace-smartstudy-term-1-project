@@ -126,9 +126,9 @@ def get_study_areas(db=Depends(get_db)):
         for row in rows:
             # Recreating Thareen's basic score logic (assuming wifi_quality is a string)
             availability_ratio = row["seats_available"] / row["capacity"]
-            wifi_score = 0.15 if row["wifi_quality"] in ["Excellent", "Good", "Fair"] else 0.0
+            wifi_score = 0.25 if row["wifi_quality"] in ["Excellent", "Good", "Fair"] else 0.0
             
-            score = (0.40 * availability_ratio) + wifi_score + (0.10 * int(row["power_available"]))
+            score = (0.60 * availability_ratio) + wifi_score + (0.15 * int(row["power_available"]))
             overall_score = min(int(score * 100), 100) 
 
             dashboard_data[row["slug"]] = {
