@@ -121,7 +121,7 @@ def get_study_areas(db=Depends(get_db)):
         # 1. Execute the heartbeat check exactly when the user loads the dashboard
         cur.execute("""
             UPDATE study_areas
-            SET wifi_available = FALSE, power_available = FALSE
+            SET wifi_available = FALSE, power_available = FALSE, wifi_quality = 'None'
             WHERE last_sync < NOW() - INTERVAL '2 minutes'
             AND (wifi_available = TRUE OR power_available = TRUE);
         """)
