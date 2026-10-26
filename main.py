@@ -12,13 +12,21 @@ from schemas import SensorEvent, OccupancySync, EnvTelemetry , CapacityUpdate
 # ! Disable the /docs , /redoc, and openapi.json routes in production
 app = FastAPI(docs_url=None,redoc_url=None,openapi_url=None,title = "SmartStudy Backend")
 
-# Add this CORS configuration (to prevent CORS errors)
+# Add this CORS configuration (to prevent CORS errors and secure the API)
+# these will not block sensors posting to backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows requests from any domain (like 127.0.0.1)
+    # Allow only your specific frontend URLs instead of "*"
+    allow_origins=[
+        "https://vps4618.github.io",  # Your GitHub Pages domain
+        "http://localhost:3000",      # Local frontend testing
+        "http://127.0.0.1:3000",
+        "http://localhost:5500",      # VS Code Live Server
+        "http://127.0.0.1:5500"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows GET, POST, etc.
-    allow_headers=["*"],  # Allows all custom headers (including X-API-Key)
+    allow_methods=["*"], 
+    allow_headers=["*"], 
 )
 
 # Load DB URL
@@ -54,41 +62,43 @@ def root():
     return {"status" : "SmartStudy API online"}
 
 # gathering posted data and update db
+# endpoint updated to Fix the Door Event Race Condition
 @app.post("/api/sensor/event")
 async def handle_sensor_event(event_data: SensorEvent, db=Depends(get_db), api_key: str = Depends(verify_api_key)):
     cur = db.cursor()
     try:
-        # 1. Get the current capacity and the latest student count
+        # Atomic read-modify-write in ONE SQL statement to prevent race conditions
         cur.execute("""
-            SELECT a.capacity, COALESCE(s.student_count, 0) as current_count
+            INSERT INTO occupancy_snapshots (
+                study_area_id, student_count, aqi, temp, feels_like, humidity, noise,
+                custom_aqi_percent, custom_aqi_label, eco2, tvoc, ens_aqi, dust_ug_m3
+            )
+            SELECT 
+                a.id,
+                CASE 
+                    WHEN %s = 'ENTER' THEN LEAST(COALESCE(s.student_count, 0) + 1, a.capacity)
+                    WHEN %s = 'EXIT'  THEN GREATEST(COALESCE(s.student_count, 0) - 1, 0)
+                    ELSE COALESCE(s.student_count, 0)
+                END,
+                s.aqi, s.temp, s.feels_like, s.humidity, s.noise,
+                s.custom_aqi_percent, s.custom_aqi_label, s.eco2, s.tvoc, s.ens_aqi, s.dust_ug_m3
             FROM study_areas a
             LEFT JOIN LATERAL (
-                SELECT student_count FROM occupancy_snapshots 
+                SELECT * FROM occupancy_snapshots 
                 WHERE study_area_id = a.id 
                 ORDER BY recorded_at DESC LIMIT 1
             ) s ON TRUE
-            WHERE a.slug = %s;
-        """, (event_data.area_id,))
+            WHERE a.slug = %s
+            RETURNING student_count;
+        """, (event_data.event, event_data.event, event_data.area_id))
         
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Study area not found")
             
-        capacity = row["capacity"]
-        current_count = row["current_count"]
+        new_count = row["student_count"]
         
-        # 2. Calculate the new count safely
-        if event_data.event == "ENTER":
-            new_count = current_count + 1 if current_count < capacity else capacity
-        elif event_data.event == "EXIT":
-            new_count = current_count - 1 if current_count > 0 else 0
-        else:
-            new_count = current_count
-            
-        # 3. Save the new count using Chamika's custom function
-        cur.execute("SELECT record_occupancy(%s, %s);", (event_data.area_id, new_count))
-        
-        # 4. Update the heartbeat since the sensor just communicated
+        # Update the heartbeat since the sensor just communicated
         cur.execute("UPDATE study_areas SET last_sync = NOW() WHERE slug = %s;", (event_data.area_id,))
         
         db.commit()
@@ -102,7 +112,6 @@ async def handle_sensor_event(event_data: SensorEvent, db=Depends(get_db), api_k
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/api/study-areas")
 def get_study_areas(db=Depends(get_db)):
@@ -126,7 +135,7 @@ def get_study_areas(db=Depends(get_db)):
         for row in rows:
             # Recreating Thareen's basic score logic (assuming wifi_quality is a string)
             availability_ratio = row["seats_available"] / row["capacity"]
-            wifi_score = 0.25 if row["wifi_quality"] in ["Excellent", "Good", "Fair"] else 0.0
+            wifi_score = 0.25 if row["wifi_quality"] in ["Excellent", "Good", "Fair", "Very Good"] else 0.0
             
             score = (0.60 * availability_ratio) + wifi_score + (0.15 * int(row["power_available"]))
             overall_score = min(int(score * 100), 100) 
@@ -353,8 +362,6 @@ def get_recommend_times(area: str = None, top: int = 3, db=Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
-# for chart.js data
 @app.get("/api/trends")
 def get_historical_trends(area: str = None, db=Depends(get_db)):
     cur = db.cursor()
