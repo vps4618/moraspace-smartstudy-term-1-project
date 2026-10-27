@@ -9,7 +9,7 @@ class SensorEvent(BaseModel):
 
 # for open area
 class OccupancySync(BaseModel):
-    area_id: str  # "apaya" or "centra"
+    area_id: str  # "apaya", "centra" and "library"
     student_count: int
 
 # for environment data

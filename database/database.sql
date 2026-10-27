@@ -607,3 +607,10 @@ BEGIN
         curr_time := curr_time + INTERVAL '1 hour';
     END LOOP;
 END $$;
+
+-- add library area
+INSERT INTO study_areas (slug, name, capacity, wifi_available, is_active, power_available, last_sync)
+VALUES ('library', 'Library Area', 100, TRUE, TRUE, TRUE, NOW())
+ON CONFLICT (slug) DO UPDATE
+SET name = EXCLUDED.name,
+    capacity = EXCLUDED.capacity;
