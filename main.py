@@ -397,10 +397,16 @@ def get_historical_trends(area: str = None, db=Depends(get_db)):
         for row in rows:
             trends[row["shift"]] = float(row["avg_pct"])
 
-        # 2. Fetch the 24-hour AQI history for the chart
+        # 2. Fetch the 24-hour history for all metrics for the charts
         if area:
             cur.execute("""
-                SELECT COALESCE(o.custom_aqi_percent, 0) as aqi
+                SELECT 
+                    COALESCE(o.custom_aqi_percent, 0) as aqi,
+                    COALESCE(o.temp, 0) as temp,
+                    COALESCE(o.feels_like, 0) as feels_like,
+                    COALESCE(o.humidity, 0) as humidity,
+                    COALESCE(o.noise, 0) as noise,
+                    COALESCE(o.student_count, 0) as student_count
                 FROM occupancy_snapshots o
                 JOIN study_areas a ON o.study_area_id = a.id
                 WHERE a.slug = %s
@@ -408,8 +414,15 @@ def get_historical_trends(area: str = None, db=Depends(get_db)):
                 ORDER BY o.recorded_at ASC;
             """, (area,))
             
-            aqi_rows = cur.fetchall()
-            trends["aqi_history"] = [float(r["aqi"]) for r in aqi_rows]
+            history_rows = cur.fetchall()
+            
+            # Package the arrays for the frontend charts
+            trends["aqi_history"] = [float(r["aqi"]) for r in history_rows]
+            trends["temp_history"] = [float(r["temp"]) for r in history_rows]
+            trends["feels_like_history"] = [float(r["feels_like"]) for r in history_rows]
+            trends["humidity_history"] = [float(r["humidity"]) for r in history_rows]
+            trends["noise_history"] = [float(r["noise"]) for r in history_rows]
+            trends["student_history"] = [int(r["student_count"]) for r in history_rows]
             
         return trends
     except Exception as e:
