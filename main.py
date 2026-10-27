@@ -362,11 +362,12 @@ def get_recommend_times(area: str = None, top: int = 3, db=Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/trends")
 def get_historical_trends(area: str = None, db=Depends(get_db)):
     cur = db.cursor()
     try:
-        # Group the last 14 days of data into 4 shifts and calculate average capacity %
+        # 1. Group the last 14 days of data into 4 shifts and calculate average capacity %
         cur.execute("""
             WITH shifts AS (
                 SELECT 
@@ -390,17 +391,30 @@ def get_historical_trends(area: str = None, db=Depends(get_db)):
         
         rows = cur.fetchall()
         
-        # Default empty structure if no data exists yet
-        trends = {"shift_1": 0.0, "shift_2": 0.0, "shift_3": 0.0, "shift_4": 0.0}
+        # Default empty structure
+        trends = {"shift_1": 0.0, "shift_2": 0.0, "shift_3": 0.0, "shift_4": 0.0, "aqi_history": []}
         
         for row in rows:
             trends[row["shift"]] = float(row["avg_pct"])
+
+        # 2. Fetch the 24-hour AQI history for the chart
+        if area:
+            cur.execute("""
+                SELECT COALESCE(o.custom_aqi_percent, 0) as aqi
+                FROM occupancy_snapshots o
+                JOIN study_areas a ON o.study_area_id = a.id
+                WHERE a.slug = %s
+                  AND o.recorded_at >= NOW() - INTERVAL '24 hours'
+                ORDER BY o.recorded_at ASC;
+            """, (area,))
+            
+            aqi_rows = cur.fetchall()
+            trends["aqi_history"] = [float(r["aqi"]) for r in aqi_rows]
             
         return trends
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/api/admin/capacity")
 async def update_capacity(
